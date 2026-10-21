@@ -1,0 +1,23 @@
+# Ingestion
+beautifulsoup4
+lxml
+html5lib
+pandas
+tabulate
+pymupdf4llm
+requests
+
+# Retrieval
+chromadb
+rank_bm25
+sentence-transformers
+
+# Generation
+anthropic
+python-dotenv
+
+# Testing
+pytest
+
+# App (added when the Streamlit demo is built)
+streamlit

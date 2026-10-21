@@ -1,0 +1,17 @@
+# Secrets — never commit real credentials
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Chroma vector-index persistence — regenerated at runtime by HybridIndex.build(),
+# large/binary, and derived entirely from data/processed/*.md — not source of truth.
+data/processed/chroma_*/
+chroma_db/
+
+# Keep the actual filing data (raw HTML + parsed Markdown) tracked, so a fresh
+# clone is runnable (demo + eval) without re-downloading from SEC EDGAR or
+# re-running the parser. Only an explicit .gitkeep placeholder was excluded
+# before, which also silently excluded everything meaningful alongside it.
