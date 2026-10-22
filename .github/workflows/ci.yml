@@ -14,6 +14,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Free up runner disk space
+        # sentence-transformers pulls in PyTorch, and PyPI's default torch wheel bundles the
+        # full NVIDIA CUDA toolkit as separate multi-GB packages (nvidia-cublas, nvidia-cudnn,
+        # triton, ...) that this CPU-only CI job never uses. That alone was enough to exhaust
+        # the standard GitHub-hosted runner's disk (confirmed 2026-10-22: "OSError: [Errno 28]
+        # No space left on device" mid-install). The CPU-only torch install below is the real
+        # fix; this step just reclaims extra headroom (preinstalled toolchains this job doesn't
+        # need) as a safety margin.
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/android "$AGENT_TOOLSDIRECTORY"
+      - name: Install CPU-only PyTorch
+        # Installed before requirements.txt so sentence-transformers' torch dependency is
+        # already satisfied by this CPU-only wheel and pip never reaches for the much larger
+        # default (CUDA-bundled) one.
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests

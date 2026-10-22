@@ -1,7 +1,7 @@
 # Chunking & Parsing Trade-off Memo
 
 Status: v0.2 — written as the ingestion pipeline was actually built, so this documents real trade-offs made, not theoretical ones
-Last updated: 2026-10-21 (Gate 2 real-eval regression fixes and documented known limitations — see Section 11)
+Last updated: 2026-10-22 (fixed CI running out of disk space on the GitHub-hosted runner — see Section 12)
 
 ## 1. HTML parsing instead of PDF-first
 
@@ -119,4 +119,11 @@ Each fix has a dedicated regression test in `tests/test_generation.py` (one per 
 - **N4 also has an unresolved numbers mismatch:** the golden set's expected answer uses a total-revenue denominator of 130,108, while the model (and its retrieved chunk) used 130,497 — a real discrepancy worth checking against the filing directly (possibly two different "total revenue" figures in NVIDIA's 10-K, or a golden-set transcription error), not yet investigated.
 - **A4 and A5 are correct answers marked "incorrect" by the eval harness's strict string-matching**, not gate failures: A4 states the exact correct difference ("$4,993 million") but doesn't also restate it rounded to "$5.0 billion" the way the golden answer does; A5 correctly states "60% indirect" but doesn't also restate the complementary "40% direct." Both are a harness/golden-set tolerance question, left as-is.
 - **M8 (the one `ambiguous`-type question) still scores 0% on ambiguous-handling** — the model answers with all three fiscal years' totals instead of asking a clarifying question. This is a prompt-engineering behavior gap (Gates 3/4 are self-reported, not code-enforced — see the module docstring in `refusal_gates.py`), not a Gate 2 issue, and not pursued further this round.
+
+
+## 12. CI ran out of disk space on the GitHub-hosted runner — fixed 2026-10-22
+
+The first CI run after pushing to GitHub (`.github/workflows/ci.yml`) failed during `pip install -r requirements.txt` with `OSError: [Errno 28] No space left on device`. Root cause: PyPI's default `torch` wheel (a transitive dependency of `sentence-transformers`) bundles the full NVIDIA CUDA toolkit as a pile of separate multi-GB packages (`nvidia-cublas`, `nvidia-cudnn-cu13`, `nvidia-cusparse`, `triton`, etc. — all visible in the failed install log), none of which this CPU-only CI job can use or needs. Combined with `chromadb`'s own sizeable dependency tree (`opentelemetry-*`, `kubernetes`, `huggingface-hub`, `transformers`), that was enough to exhaust the standard GitHub-hosted runner's disk mid-install.
+
+**Fix:** `ci.yml` now installs the CPU-only `torch` wheel first (`pip install torch --index-url https://download.pytorch.org/whl/cpu`), before `pip install -r requirements.txt` — so when `sentence-transformers` later requests `torch`, pip sees it's already installed and satisfied, and never reaches for the much larger CUDA-bundled default. A `Free up runner disk space` step (removing preinstalled toolchains the job doesn't use — dotnet, Android SDK, etc.) was added as additional headroom, but the CPU-only torch install is the actual fix; the cleanup step alone would not have been enough given how large the CUDA wheel set is.
 
