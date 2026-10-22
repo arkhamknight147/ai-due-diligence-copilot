@@ -1,8 +1,10 @@
 # AI Due Diligence Copilot
 
+[![CI](https://github.com/arkhamknight147/ai-due-diligence-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/arkhamknight147/ai-due-diligence-copilot/actions/workflows/ci.yml)
+
 A grounded RAG assistant that answers factual questions from SEC 10-K filings — built to demonstrate table-aware retrieval and an explicit, code-enforced refusal policy against fabricated numbers, not to give investment advice.
 
-**Status: functional prototype.** Ingestion, table-aware chunking, hybrid retrieval, and generation with refusal gates are built, unit-tested (33 tests), and verified against three real filings (not just synthetic fixtures). An eval harness exists and its retrieval-stage findings already drove two real design decisions (below). A full LLM-graded baseline run is the one step still pending — it needs an `ANTHROPIC_API_KEY` this build environment didn't have; see [Running it yourself](#running-it-yourself).
+**Status: functional prototype, validated against a real baseline.** Ingestion, table-aware chunking, hybrid retrieval, and generation with refusal gates are built, unit-tested (42 tests), and verified against three real filings (not just synthetic fixtures). A real 30-question eval run (live Anthropic API, real golden set) found and fixed five Gate 2 false-positive bugs, taking `false_refusal_rate` from 0.652 to 0.478 and `numeric_exact_match_rate` from 0.267 to 0.467 — see [`docs/TRADE_OFFS.md`](docs/TRADE_OFFS.md) Section 11 for the full trail and remaining known limitations. `faithfulness`/`context_precision`/`answer_relevance` still need an LLM-judge wiring that hasn't been built yet; see [`docs/EVALS_AND_BENCHMARKS.md`](docs/EVALS_AND_BENCHMARKS.md).
 
 ## The problem
 
@@ -52,37 +54,44 @@ src/
   ingestion/   HTML parsing, table extraction, table-aware chunking
   retrieval/   Hybrid BM25 + vector search (RRF fusion)
   generation/  LLM client, citation-forcing prompt, refusal gates, orchestration
-eval/          30-question golden set + scoring harness (eval/run_eval.py)
-data/          Raw filings (gitignored) and parsed Markdown output
-tests/         33 unit tests across ingestion, retrieval, generation, and the eval harness
+eval/          30-question golden set (.json + reviewable .xlsx) + scoring harness (eval/run_eval.py) + results.json
+data/          Raw filings and parsed Markdown output — tracked, not gitignored (see data/README.md); only the
+                regenerable Chroma vector index under data/processed/ is gitignored
+tests/         42 unit tests across ingestion, retrieval, generation, and the eval harness
 app.py         Streamlit demo
 ```
 
 ## Running it yourself
 
+The three frozen filings (raw HTML + parsed, table-aware Markdown) are already committed under `data/` — no download or parsing needed to run the demo or eval as-is.
+
 ```bash
 pip install -r requirements.txt
 
-# 1. Get the three frozen filings (see docs/PRD.md Section 3 for exact URLs/dates).
-#    This sandbox's network couldn't reach sec.gov — download manually or run:
-python src/ingestion/download_filings.py   # needs normal internet access
-
-# 2. Parse them into table-aware Markdown
-python src/ingestion/parse_filing.py data/raw/aapl-20250927.htm data/processed/aapl-20250927.md
-python src/ingestion/parse_filing.py data/raw/msft-20250630.htm data/processed/msft-20250630.md
-python src/ingestion/parse_filing.py data/raw/nvda-20250126.htm data/processed/nvda-20250126.md
-
-# 3. Add your own Anthropic API key (see .env.example)
+# 1. Add your own Anthropic API key (see .env.example)
 cp .env.example .env  # then fill in ANTHROPIC_API_KEY
 
-# 4. Run the demo
+# 2. Run the demo
 streamlit run app.py
 
-# 5. Run the eval harness for a real baseline (needs step 3's key)
+# 3. Run the eval harness for a real baseline (needs step 1's key)
 python -m eval.run_eval
 ```
 
 `python -m eval.run_eval --dry-run` runs the same harness with a scripted fake model — no API key needed — as a wiring smoke test only; see [`docs/EVALS_AND_BENCHMARKS.md`](docs/EVALS_AND_BENCHMARKS.md) for why its numbers aren't meaningful accuracy results.
+
+<details>
+<summary>Regenerating the pipeline from scratch (optional — not needed to run the demo or eval)</summary>
+
+```bash
+python src/ingestion/download_filings.py   # re-downloads the three frozen filings from SEC EDGAR
+python src/ingestion/parse_filing.py data/raw/aapl-20250927.htm data/processed/aapl-20250927.md
+python src/ingestion/parse_filing.py data/raw/msft-20250630.htm data/processed/msft-20250630.md
+python src/ingestion/parse_filing.py data/raw/nvda-20250126.htm data/processed/nvda-20250126.md
+```
+
+See [`docs/PRD.md`](docs/PRD.md) Section 3 for the exact frozen URLs/dates.
+</details>
 
 ## Engineering log: what actually happened
 
@@ -92,6 +101,8 @@ This project was built stage by stage, and several real defects were only found 
 - Real 10-Ks don't use semantic `<h1>`-`<h6>` heading tags (SEC filings fake headings with bold styled `<div>`s) — section tagging and citations were completely broken on real filings (240/240 chunks tagged "unknown section") until this was found and fixed.
 - Gate 1's retrieval-confidence threshold started at 0.70 per the PRD, with a built-in instruction to sanity-check it against real data once a baseline existed. That baseline showed answerable and unanswerable questions' similarity scores overlap almost entirely, and 0.70 alone refused 79% of answerable questions before the model was ever asked. Lowered to 0.60 as an explicit, logged decision — not a silent tuning change.
 - A "fix" to help numeric-question retrieval (a small table-chunk boost) improved numeric coverage from 5/15 to 9/15 golden questions at the same retrieval depth, but was also caught promoting an irrelevant "Exhibit Listing" boilerplate table for one textual question — fixed with a narrow, documented exclusion rather than left as a silent false positive.
+- The first real eval run (live API key, real golden set) found Gate 2 — the code-enforced numeric-traceability check — refusing *correct* answers for five unrelated reasons: filing-form digits ("10-K" read as the number "10"), markdown list markers, legitimate unit restatements and disclosed arithmetic, a follow-up bug where the first filing-form fix only worked for single-digit forms, and fiscal-quarter labels ("Q3"). Each got a dedicated regression test; `false_refusal_rate` dropped from 0.652 to 0.478 across the fixes. Full trail: [`docs/TRADE_OFFS.md`](docs/TRADE_OFFS.md) Section 11.
+- CI's first run on GitHub failed with `OSError: [Errno 28] No space left on device` — `sentence-transformers` pulls in PyTorch's default CUDA-bundled wheel, which drags several GB of unused NVIDIA toolkit packages onto a CPU-only runner. Fixed by installing the CPU-only torch wheel first. See [`docs/TRADE_OFFS.md`](docs/TRADE_OFFS.md) Section 12.
 
 ## Current filing scope (frozen for reproducibility)
 
